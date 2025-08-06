@@ -6,13 +6,14 @@ DISTRIBUTED_ARGS="--nproc_per_node 1 \
                   --master_addr localhost \
                   --master_port 6000"
 
-CHECKPOINT=<Path to checkpoint (e.g /345m)>
-VOCAB_FILE=<Path to vocab.json (e.g. /gpt2-vocab.json)>
-MERGE_FILE=<Path to merges.txt (e.g. /gpt2-merges.txt)>
+CHECKPOINT="/home/yylvsx/RL_Learn/345m_gpt"
+VOCAB_FILE="/home/yylvsx/RL_Learn/345m_gpt/gpt2-vocab.json"
+MERGE_FILE="/home/yylvsx/RL_Learn/345m_gpt/gpt2-merges.txt"
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
-pip install flask-restful
+
+# pip install flask-restful
 
 torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
        --tensor-model-parallel-size 1  \
@@ -28,4 +29,10 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
        --seq-length 1024  \
        --vocab-file $VOCAB_FILE  \
        --merge-file $MERGE_FILE  \
-       --seed 42
+       --seed 42 \
+       --transformer-impl local \
+       --no-persist-layer-norm \
+       --no-gradient-reduce-div-fusion \
+       --no-gradient-accumulation-fusion \
+       # --vocab-size 50257 \
+       # --make-vocab-size-divisible-by 1 \

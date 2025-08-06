@@ -1,0 +1,1 @@
+cd /home/yylvsx/RL_Learn && python Megatron-LM/tools/text_generation_cli.py localhost:5000

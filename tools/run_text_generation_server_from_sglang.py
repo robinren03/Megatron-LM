@@ -48,6 +48,8 @@ from megatron.training import get_args, get_model, get_tokenizer
 from megatron.training.checkpointing import load_checkpoint
 from megatron.training.initialize import initialize_megatron
 
+from convert_weight import convert_sglang_to_megatron
+
 
 def model_provider(
     pre_process=True, post_process=True
@@ -113,8 +115,62 @@ def model_provider(
             rope_scaling=args.use_rope_scaling,
             rope_scaling_factor=args.rope_scaling_factor,
         )
-
+    # for name, param in model.named_parameters():
+    #     if param is None:
+    #         print(f"Parameter {name} is None!")
+    #     else:
+    #         print(f"Name: {name}  Type: {param.dtype}  Shape: {param.shape}")
+    # exit()
     return model
+
+
+
+def get_configs(
+    pre_process=True, post_process=True
+):
+    args = get_args()
+    use_te = args.transformer_impl == "transformer_engine"
+
+    print_rank_0('获取config中 ...')
+
+    # Experimental loading arguments from yaml
+    if args.yaml_cfg is not None:
+        config = core_transformer_config_from_yaml(args, "language_model")
+    else:
+        config = core_transformer_config_from_args(args)
+
+    if args.use_legacy_models:
+        model = megatron.legacy.model.GPTModel(
+            config,
+            num_tokentypes=0,
+            parallel_output=False,
+            pre_process=pre_process,
+            post_process=post_process,
+        )
+    else:
+        if args.spec is not None:
+            transformer_layer_spec = import_module(args.spec)
+        else:
+            if use_te:
+                transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
+                    args.num_experts, args.moe_grouped_gemm, args.qk_layernorm
+                )
+            else:
+                transformer_layer_spec = get_gpt_layer_local_spec(
+                    args.num_experts, args.moe_grouped_gemm, args.qk_layernorm
+                )
+    return config, \
+        transformer_layer_spec, \
+        args.padded_vocab_size, \
+        args.max_position_embeddings, \
+        pre_process, \
+        post_process, \
+        args.fp16_lm_cross_entropy, \
+        args.untie_embeddings_and_output_weights, \
+        args.position_embedding_type, args.rotary_percent, \
+        args.rotary_base, \
+        args.use_rope_scaling, \
+        args.rope_scaling_factor
 
 
 def get_inference_engine(args: Namespace, model: MegatronModule) -> AbstractEngine:
@@ -205,10 +261,18 @@ if __name__ == "__main__":
 
         load_context = fp8_model_init()
     with load_context:
-        model = get_model(model_provider, wrap_with_ddp=False)
 
-    if args.load is not None:
-        _ = load_checkpoint(model, None, None)
+        # sglang model 加载
+        from get_model_sglang import get_sglang_model
+        sglang_model = get_sglang_model()  
+        sglang_weights = sglang_model.state_dict()
+        convert_megatron_weights = convert_sglang_to_megatron(sglang_weights)
+        
+
+        model = get_model(model_provider, wrap_with_ddp=False)
+        model[0].load_state_dict(convert_megatron_weights)
+        # if args.load is not None:
+        #     _ = load_checkpoint(model, None, None)
 
     assert len(model) == 1, "Above condition should have caught this"
     model = model[0]

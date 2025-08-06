@@ -345,6 +345,36 @@ class _GPT2BPETokenizer(MegatronTokenizer):
     def detokenize(self, token_ids):
         return self.tokenizer.decode(token_ids)
 
+    def offsets(self, ids: list[int], text: str) -> list[int]:
+        """Convert embedding ids to text offsets for GPT2 tokenizer."""
+        # For GPT2 BPE tokenizer, we need to manually calculate offsets
+        # This is a simplified implementation
+        offsets = []
+        current_pos = 0
+        
+        for token_id in ids:
+            if token_id in self.tokenizer.decoder:
+                token = self.tokenizer.decoder[token_id]
+                # Convert byte tokens to actual characters
+                try:
+                    # Handle byte tokens
+                    if token.startswith('<|') and token.endswith('|>'):
+                        # Special tokens
+                        offsets.append(current_pos)
+                        current_pos += len(token)
+                    else:
+                        # Regular tokens
+                        offsets.append(current_pos)
+                        current_pos += len(token)
+                except:
+                    offsets.append(current_pos)
+                    current_pos += 1
+            else:
+                offsets.append(current_pos)
+                current_pos += 1
+        
+        return offsets
+
     @property
     def eod(self):
         return self.eod_id

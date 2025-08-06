@@ -1,0 +1,8 @@
+- `bash /Megatron-LM/examples/inference/run_text_generation_server_345M.sh` 来执行推理
+- `run_text_generation_server_345M.sh` 会调用`/Megatron-LM/tools/run_text_generation_server.py`
+- `run_text_generation_server.py` 直接加载Megatron模型
+- `run_text_generation_server_from_sglang.py` 加载sglang模型，并将权重经过`convert_weight`加载到megatron模型上
+- `run_text_generation_server_345M.sh` 文件内可修改模型地址
+- `trans.sh`负责调用Megatron自带的转化脚本
+- `get_model_megatron.py` 负责获取megatron下的model
+- `convert_weight.py` 负责转换权重

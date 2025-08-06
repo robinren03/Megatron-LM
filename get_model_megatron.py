@@ -141,8 +141,12 @@ def get_inference_engine(args: Namespace, model: MegatronModule) -> AbstractEngi
         inference_max_seq_length=args.inference_max_seq_length,
         inference_max_requests=args.inference_max_batch_size,
     )
-
-    inference_wrapped_model = ModelInferenceWrapperServer(model, inference_wrapper_config)
+    from tools.sglang_adapter import SglangModelInferenceWrapper
+    if isinstance(model, SglangModelInferenceWrapper):
+        inference_wrapped_model = model
+    else:
+        # 否则创建ModelInferenceWrapperServer
+        inference_wrapped_model = ModelInferenceWrapperServer(model, inference_wrapper_config)
     text_generation_controller = TextGenerationController(inference_wrapped_model=inference_wrapped_model, tokenizer=tokenizer)
     return StaticInferenceEngine(
         text_generation_controller=text_generation_controller, max_batch_size=args.max_batch_size
@@ -182,6 +186,87 @@ def add_text_generate_args(parser):
     return parser
 
 
+def megatron_model():
+    print("开始加载megatron模型！！！")
+    
+    # 保存原始的sys.argv
+    original_argv = sys.argv.copy()
+    
+    # 添加命令行参数来覆盖框架默认值
+    sys.argv.extend([
+        '--seed', '42',
+        '--fp16',
+        '--transformer-impl', 'local',
+        '--no-persist-layer-norm',
+        '--make-vocab-size-divisible-by', '1',
+        '--fp32-residual-connection',
+        '--inference-max-seq-length', '1024',
+        '--inference-max-batch-size', '8',
+        '--no-gradient-accumulation-fusion',
+        '--no-gradient-reduce-div-fusion'
+    ])
+    
+    try:
+        initialize_megatron(
+            args_defaults = {
+                'no_load_rng': True,
+                'no_load_optim': True,
+                'exit_on_missing_checkpoint': False,
+                # 现在这些值会生效
+                'seed': 42,
+                'fp16': True,
+                'transformer_impl': 'local',
+                'tensor_model_parallel_size': 1,
+                'pipeline_model_parallel_size': 1,
+                'num_layers': 24,
+                'hidden_size': 1024,
+                'load': '/home/yylvsx/RL_Learn/diagpt2/pytorch_model.bin',
+                'num_attention_heads': 16,
+                'max_position_embeddings': 1024,
+                'tokenizer_type': 'GPT2BPETokenizer',
+                'micro_batch_size': 1,
+                'seq_length': 1024,
+                'vocab_file': '/home/yylvsx/RL_Learn/diagpt2/vocab.json',
+                'merge_file': '/home/yylvsx/RL_Learn/diagpt2/merges.txt',
+                'no_gradient_reduce_div_fusion': True,
+                'no_gradient_accumulation_fusion': True,
+                'vocab_size': 50257,
+                'max_batch_size': 8,
+                'params_dtype': 'float16',
+                'padded_vocab_size': 50257,
+            },
+            ignore_unknown_args=True
+        )
+    finally:
+        # 恢复原始的sys.argv
+        sys.argv = original_argv
+
+    args = get_args()
+    if args.num_layers_per_virtual_pipeline_stage is not None:
+        print("Interleaved pipeline schedule is not yet supported for text generation.")
+        exit()
+    print_rank_0("WARNING: Forcing exit_on_missing_checkpoint to True for text " "generation.")
+    args.exit_on_missing_checkpoint = False
+
+    # Set up model and load checkpoint
+    load_context = nullcontext()
+    if args.fp8:
+        from transformer_engine.pytorch.fp8 import fp8_model_init
+
+        load_context = fp8_model_init()
+    with load_context:
+        model = get_model(model_provider, wrap_with_ddp=False)
+
+    if args.load is not None:
+        _ = load_checkpoint(model, None, None)
+
+    assert len(model) == 1, "Above condition should have caught this"
+    model = model[0]
+    model.eval()
+    print("megatron model 加载成功！！！")
+    return model
+
+
 if __name__ == "__main__":
     initialize_megatron(
         extra_args_provider=add_text_generate_args,
@@ -198,6 +283,7 @@ if __name__ == "__main__":
         exit()
     print_rank_0("WARNING: Forcing exit_on_missing_checkpoint to True for text " "generation.")
     args.exit_on_missing_checkpoint = False
+
     # Set up model and load checkpoint
     load_context = nullcontext()
     if args.fp8:
@@ -213,24 +299,3 @@ if __name__ == "__main__":
     assert len(model) == 1, "Above condition should have caught this"
     model = model[0]
     model.eval()
-
-    inference_engine = get_inference_engine(args, model)
-
-    if args.enable_cuda_graph:
-        print(f"Running warmup for CUDA graphs...")
-        inference_engine.generate(
-            prompts=["Test prompt"], sampling_params=SamplingParams(num_tokens_to_generate=10)
-        )
-
-    if mpu.is_pipeline_first_stage() and mpu.get_tensor_model_parallel_rank() == 0:
-        server = MegatronServer(inference_engine, args)
-        server.run("0.0.0.0", port=args.port)
-
-    while True:
-        choice = torch.tensor(1, dtype=torch.long, device='cuda')
-        torch.distributed.broadcast(choice, 0)
-        if choice.item() == 0:
-            try:
-                run_mcore_engine(inference_engine)
-            except ValueError as ve:
-                pass
